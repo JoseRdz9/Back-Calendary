@@ -2,59 +2,48 @@ using Back_Calendary.Data;
 using Back_Calendary.Helpers;
 using Back_Calendary.Services.Auth;
 using Back_Calendary.Settings;
-// using Back_Calendary.Services.Profile;
-// using Back_Calendary.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
-using System.Text;
-using Microsoft.IdentityModel.Protocols.OpenIdConnect;
-using System.Net.Http;
 using Supabase;
 using Back_Calendary.Interfaces.Calendary;
 using Back_Calendary.Repositories.Calendary;
 using Back_Calendary.Services.Calendary;
 
-
 var builder = WebApplication.CreateBuilder(args);
 
-// Controllers
+// ===================== CONTROLLERS =====================
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-//Repositorios
+// ===================== REPOSITORIES =====================
 builder.Services.AddScoped<ICycleRepository, CycleRepository>();
 builder.Services.AddScoped<ILogRepository, LogRepository>();
 builder.Services.AddScoped<IPredictionRepository, PredictionRepository>();
 
-// Services
+// ===================== SERVICES =====================
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<JwtHelper>();
-builder.Services.AddScoped<IProfileService, ProfileService>();
-builder.Services.AddScoped<IFileStorage, LocalFileStorage>();
-builder.Services.AddHttpClient();
 builder.Services.AddScoped<ICycleService, CycleService>();
 builder.Services.AddScoped<ILogService, LogService>();
 
-// Motor de predicción — singleton porque no guarda estado
+builder.Services.AddScoped<IFileStorage, LocalFileStorage>();
+
+builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IPredictionEngine, CyclePredictionEngine>();
 
-
+// ===================== CONFIG =====================
 builder.Services.Configure<SupabaseSettings>(
     builder.Configuration.GetSection("Supabase")
 );
 
-builder.Services.AddHttpClient<IAuthService, AuthService>();
-
-
-
-// DB
+// ===================== DB =====================
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"))
 );
 
-// CORS
+// ===================== CORS =====================
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -65,62 +54,72 @@ builder.Services.AddCors(options =>
     });
 });
 
-// AUTH JWT
+// ===================== SUPABASE CONFIG =====================
 var supabaseUrl = builder.Configuration["Supabase:Url"];
+var supabaseKey = builder.Configuration["Supabase:AnonKey"];
+
+if (string.IsNullOrEmpty(supabaseUrl))
+    throw new Exception("Supabase:Url no está configurado");
+
+if (string.IsNullOrEmpty(supabaseKey))
+    throw new Exception("Supabase:AnonKey no está configurado");
+
+// ===================== JWKS =====================
 var jwksUri = $"{supabaseUrl}/auth/v1/.well-known/jwks.json";
 
-// Descargar JWKS manualmente al arrancar
-var httpClient = new HttpClient();
-var jwksJson = await httpClient.GetStringAsync(jwksUri);
-var jwks = new JsonWebKeySet(jwksJson);
-var signingKeys = jwks.GetSigningKeys();
+IList<SecurityKey> signingKeys = new List<SecurityKey>();
 
+try
+{
+    using var httpClient = new HttpClient();
 
+    var jwksJson = await httpClient.GetStringAsync(jwksUri);
+
+    var jwks = new JsonWebKeySet(jwksJson);
+
+    signingKeys = jwks.GetSigningKeys();
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"JWKS load error: {ex.Message}");
+    signingKeys = new List<SecurityKey>();
+}
+
+// ===================== AUTH JWT =====================
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuerSigningKey = true,
-            IssuerSigningKeys = signingKeys,  // claves ES256 cargadas
+            IssuerSigningKeys = signingKeys,
+
             ValidateIssuer = true,
             ValidIssuer = $"{supabaseUrl}/auth/v1",
+
             ValidateAudience = false,
-            ValidateLifetime = true,
+            ValidateLifetime = true
         };
-
-        options.Events = new JwtBearerEvents
-        {
-            OnAuthenticationFailed = context =>
-            {
-                return Task.CompletedTask;
-            },
-            OnTokenValidated = _ =>
-            {
-                return Task.CompletedTask;
-            }
-        };
-    }
-);
-//JWT
-var supabaseKey = builder.Configuration["Supabase:AnonKey"];
-
-builder.Services.AddSingleton(provider =>
-{
-    var client = new Supabase.Client(supabaseUrl, supabaseKey, new Supabase.SupabaseOptions
-    {
-        AutoConnectRealtime = false
     });
 
-    // Inicializar el cliente (necesario para que Postgrest funcione)
-    client.InitializeAsync().GetAwaiter().GetResult();
+// ===================== SUPABASE CLIENT =====================
+builder.Services.AddSingleton(_ =>
+{
+    var client = new Supabase.Client(
+        supabaseUrl,
+        supabaseKey,
+        new Supabase.SupabaseOptions
+        {
+            AutoConnectRealtime = false
+        });
 
+    client.InitializeAsync().GetAwaiter().GetResult();
     return client;
 });
 
 var app = builder.Build();
 
-// Pipeline
+// ===================== PIPELINE =====================
 app.UseCors("AllowAll");
 
 if (app.Environment.IsDevelopment())
@@ -128,14 +127,20 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+else
+{
+    // Render ya maneja HTTPS
+}
 
-app.UseHttpsRedirection();
+app.UseStaticFiles();
 
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.UseStaticFiles();
-
 app.MapControllers();
+
+// ===================== RENDER PORT =====================
+var port = Environment.GetEnvironmentVariable("PORT") ?? "10000";
+app.Urls.Add($"http://0.0.0.0:{port}");
 
 app.Run();
