@@ -9,91 +9,171 @@ public class ProfileController : ControllerBase
 {
     private readonly IProfileService _profileService;
 
+
     public ProfileController(IProfileService profileService)
     {
         _profileService = profileService;
     }
 
+
+
     private Guid GetUserId()
     {
-        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-                          ?? User.FindFirst("sub")?.Value;
+
+        // Supabase "sub" viene mapeado por .NET a NameIdentifier
+        var userIdClaim =
+            User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ??
+            User.FindFirst("sub")?.Value;
+
+
 
         if (string.IsNullOrEmpty(userIdClaim))
-            throw new UnauthorizedAccessException("Token inválido: no contiene sub");
+        {
+            throw new UnauthorizedAccessException(
+                "Token no contiene user id"
+            );
+        }
+
+
 
         if (!Guid.TryParse(userIdClaim, out Guid userId))
-            throw new UnauthorizedAccessException("Token inválido: sub no es GUID");
+        {
+
+            Console.WriteLine(
+                $"❌ UUID inválido: {userIdClaim}"
+            );
+
+
+            throw new UnauthorizedAccessException(
+                "El user id no es GUID válido"
+            );
+        }
+
+
+
+        Console.WriteLine(
+            $"✅ USER ID: {userId}"
+        );
+
 
         return userId;
     }
 
+
+
+
     [HttpGet]
     public async Task<IActionResult> GetProfile()
     {
+
         try
         {
+
             var userId = GetUserId();
 
-            var user = await _profileService.GetProfileAsync(userId);
+
+            var user =
+                await _profileService.GetProfileAsync(userId);
+
+
 
             if (user == null)
-                return NotFound("Usuario no encontrado");
+            {
+                return NotFound(
+                    "Usuario no encontrado"
+                );
+            }
+
+
 
             return Ok(user);
+
         }
         catch (UnauthorizedAccessException ex)
         {
-            return Unauthorized(ex.Message);
-        }
-    }
 
-    [HttpPut]
-    public async Task<IActionResult> UpdateProfile([FromForm] UpdateProfileDto dto)
-    {
-        try
-        {
-            Console.WriteLine("📥 [1] Endpoint UpdateProfile llamado");
+            return Unauthorized(
+                ex.Message
+            );
 
-            var userId = GetUserId();
-            Console.WriteLine($"🆔 [2] UserId: {userId}");
-
-            if (dto == null)
-            {
-                Console.WriteLine("❌ DTO es NULL");
-                return BadRequest("DTO inválido");
-            }
-
-            Console.WriteLine("📦 [3] DTO recibido");
-
-            Console.WriteLine($"✉️ Email: {dto.Email}");
-
-            if (dto.Image != null)
-            {
-                Console.WriteLine("🖼️ [4] Imagen RECIBIDA");
-                Console.WriteLine($"📛 FileName: {dto.Image.FileName}");
-                Console.WriteLine($"📏 Size: {dto.Image.Length}");
-            }
-            else
-            {
-                Console.WriteLine("⚠️ [4] Imagen NULL");
-            }
-
-            var result = await _profileService.UpdateProfileAsync(userId, dto);
-
-            Console.WriteLine("✅ [5] Perfil actualizado correctamente");
-
-            return Ok(result);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            Console.WriteLine("❌ Unauthorized: " + ex.Message);
-            return Unauthorized(ex.Message);
         }
         catch (Exception ex)
         {
-            Console.WriteLine("❌ Error: " + ex.Message);
-            return BadRequest(ex.Message);
+
+            Console.WriteLine(
+                "❌ ERROR GET PROFILE: "
+                + ex.Message
+            );
+
+
+            return StatusCode(
+                500,
+                "Error interno"
+            );
+
         }
+
     }
+
+
+
+
+    [HttpPut]
+    public async Task<IActionResult> UpdateProfile(
+        [FromForm] UpdateProfileDto dto)
+    {
+
+        try
+        {
+
+            var userId = GetUserId();
+
+
+
+            if (dto == null)
+            {
+                return BadRequest(
+                    "DTO inválido"
+                );
+            }
+
+
+
+            var result =
+                await _profileService.UpdateProfileAsync(
+                    userId,
+                    dto
+                );
+
+
+
+            return Ok(result);
+
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+
+            return Unauthorized(
+                ex.Message
+            );
+
+        }
+        catch (Exception ex)
+        {
+
+            Console.WriteLine(
+                "❌ ERROR UPDATE PROFILE: "
+                + ex.Message
+            );
+
+
+            return StatusCode(
+                500,
+                ex.Message
+            );
+
+        }
+
     }
+}

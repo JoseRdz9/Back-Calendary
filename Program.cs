@@ -9,102 +9,67 @@ using Supabase;
 using Back_Calendary.Interfaces.Calendary;
 using Back_Calendary.Repositories.Calendary;
 using Back_Calendary.Services.Calendary;
+using System.Security.Claims;
+using Microsoft.IdentityModel.JsonWebTokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ===================== CONTROLLERS =====================
+
+// ================= CONFIG =================
+
+var configuration = builder.Configuration;
+
+var supabaseUrl = configuration["Supabase:Url"];
+var supabaseKey = configuration["Supabase:AnonKey"];
+
+
+if (string.IsNullOrEmpty(supabaseUrl))
+    throw new Exception("Supabase URL missing");
+
+if (string.IsNullOrEmpty(supabaseKey))
+    throw new Exception("Supabase Key missing");
+
+
+// ================= CONTROLLERS =================
+
 builder.Services.AddControllers();
+
 builder.Services.AddEndpointsApiExplorer();
+
 builder.Services.AddSwaggerGen();
 
-// ===================== REPOSITORIES =====================
+
+// ================= REPOSITORIES =================
+
 builder.Services.AddScoped<ICycleRepository, CycleRepository>();
 builder.Services.AddScoped<ILogRepository, LogRepository>();
 builder.Services.AddScoped<IPredictionRepository, PredictionRepository>();
 
-// ===================== SERVICES =====================
+builder.Services.AddScoped<IProfileService, ProfileService>();
+
+
+// ================= SERVICES =================
+
 builder.Services.AddScoped<IAuthService, AuthService>();
+
 builder.Services.AddScoped<JwtHelper>();
+
 builder.Services.AddScoped<ICycleService, CycleService>();
+
 builder.Services.AddScoped<ILogService, LogService>();
 
 builder.Services.AddScoped<IFileStorage, LocalFileStorage>();
 
-builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IPredictionEngine, CyclePredictionEngine>();
 
-// ===================== CONFIG =====================
-builder.Services.Configure<SupabaseSettings>(
-    builder.Configuration.GetSection("Supabase")
-);
+builder.Services.AddHttpClient();
 
-// ===================== DB =====================
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"))
-);
 
-// ===================== CORS =====================
-builder.Services.AddCors(options =>
+// ================= SUPABASE CLIENT =================
+
+builder.Services.AddSingleton<Supabase.Client>(_ =>
 {
-    options.AddPolicy("AllowAll", policy =>
-    {
-        policy.AllowAnyOrigin()
-              .AllowAnyHeader()
-              .AllowAnyMethod();
-    });
-});
 
-// ===================== SUPABASE CONFIG =====================
-var supabaseUrl = builder.Configuration["Supabase:Url"];
-var supabaseKey = builder.Configuration["Supabase:AnonKey"];
-
-if (string.IsNullOrEmpty(supabaseUrl))
-    throw new Exception("Supabase:Url no está configurado");
-
-if (string.IsNullOrEmpty(supabaseKey))
-    throw new Exception("Supabase:AnonKey no está configurado");
-
-// ===================== JWKS =====================
-var jwksUri = $"{supabaseUrl}/auth/v1/.well-known/jwks.json";
-
-IList<SecurityKey> signingKeys = new List<SecurityKey>();
-
-try
-{
-    using var httpClient = new HttpClient();
-
-    var jwksJson = await httpClient.GetStringAsync(jwksUri);
-
-    var jwks = new JsonWebKeySet(jwksJson);
-
-    signingKeys = jwks.GetSigningKeys();
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"JWKS load error: {ex.Message}");
-    signingKeys = new List<SecurityKey>();
-}
-
-// ===================== AUTH JWT =====================
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKeys = signingKeys,
-
-            ValidateIssuer = true,
-            ValidIssuer = $"{supabaseUrl}/auth/v1",
-
-            ValidateAudience = false,
-            ValidateLifetime = true
-        };
-    });
-
-// ===================== SUPABASE CLIENT =====================
-builder.Services.AddSingleton(_ =>
-{
     var client = new Supabase.Client(
         supabaseUrl,
         supabaseKey,
@@ -113,34 +78,199 @@ builder.Services.AddSingleton(_ =>
             AutoConnectRealtime = false
         });
 
-    client.InitializeAsync().GetAwaiter().GetResult();
+
+    client.InitializeAsync()
+        .GetAwaiter()
+        .GetResult();
+
+
     return client;
+
 });
+
+
+
+// ================= CONFIG OBJECTS =================
+
+builder.Services.Configure<SupabaseSettings>(
+    configuration.GetSection("Supabase")
+);
+
+
+
+// ================= DATABASE =================
+
+builder.Services.AddDbContext<AppDbContext>(options =>
+{
+
+    options.UseNpgsql(
+        configuration.GetConnectionString("DefaultConnection")
+    );
+
+});
+
+
+
+// ================= CORS =================
+
+builder.Services.AddCors(options =>
+{
+
+    options.AddPolicy("AllowAll", policy =>
+    {
+
+        policy
+            .AllowAnyOrigin()
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+
+    });
+
+});
+
+
+
+
+// ================= AUTH SUPABASE JWT =================
+
+var jwksUrl =
+    $"{supabaseUrl}/auth/v1/.well-known/jwks.json";
+
+
+var http = new HttpClient();
+
+
+var jwksJson =
+    await http.GetStringAsync(jwksUrl);
+
+
+var keys =
+    new JsonWebKeySet(jwksJson)
+        .GetSigningKeys();
+
+builder.Services
+.AddAuthentication(
+    JwtBearerDefaults.AuthenticationScheme
+)
+
+.AddJwtBearer(options =>
+{
+
+
+    options.TokenValidationParameters =
+        new TokenValidationParameters
+        {
+
+            ValidateIssuerSigningKey = true,
+
+
+            IssuerSigningKeys = keys,
+
+
+            ValidateIssuer = true,
+
+
+            ValidIssuer =
+                $"{supabaseUrl}/auth/v1",
+
+
+
+            ValidateAudience = true,
+
+
+            ValidAudience =
+                "authenticated",
+
+
+
+            ValidateLifetime = true,
+
+
+
+            NameClaimType =
+                "sub"
+
+        };
+
+
+
+    options.Events =
+        new JwtBearerEvents
+        {
+
+
+            OnAuthenticationFailed = context =>
+            {
+
+
+                Console.WriteLine(
+                    context.Exception.Message
+                );
+
+
+                return Task.CompletedTask;
+
+            },
+
+
+
+            OnTokenValidated = context =>
+            {
+                return Task.CompletedTask;
+
+            }
+
+
+        };
+
+
+});
+
+
+
+
+// ================= BUILD =================
 
 var app = builder.Build();
 
-// ===================== PIPELINE =====================
+
+
+// ================= PIPELINE =================
+
 app.UseCors("AllowAll");
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
-else
-{
-    // Render ya maneja HTTPS
-}
+
+app.UseSwagger();
+
+app.UseSwaggerUI();
+
 
 app.UseStaticFiles();
 
+
+
 app.UseAuthentication();
+
+
 app.UseAuthorization();
+
+
 
 app.MapControllers();
 
-// ===================== RENDER PORT =====================
-var port = Environment.GetEnvironmentVariable("PORT") ?? "10000";
-app.Urls.Add($"http://0.0.0.0:{port}");
+
+
+// ================= PORT =================
+
+var port =
+    Environment.GetEnvironmentVariable("PORT")
+    ?? "5095";
+
+
+builder.WebHost.UseUrls(
+    $"http://0.0.0.0:{port}"
+);
+
+
 
 app.Run();
