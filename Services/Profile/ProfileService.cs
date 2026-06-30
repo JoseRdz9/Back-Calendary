@@ -36,23 +36,50 @@ public class ProfileService : IProfileService
         var doc = JsonDocument.Parse(json).RootElement;
 
         var email = doc.GetProperty("email").GetString() ?? "";
-
-        // 🔥 SOLO filename desde metadata
+        
+        // ✅ Obtener display_name desde user_metadata
+        string? displayName = null;
         string? fileName = null;
 
-        if (doc.TryGetProperty("user_metadata", out var meta) &&
-            meta.TryGetProperty("image_url", out var imgProp))
+        if (doc.TryGetProperty("user_metadata", out var meta))
         {
-            fileName = imgProp.GetString();
+            // Obtener display_name
+            if (meta.TryGetProperty("display_name", out var displayNameProp))
+            {
+                displayName = displayNameProp.GetString();
+            }
+            else if (meta.TryGetProperty("full_name", out var fullNameProp))
+            {
+                // Fallback a full_name si existe
+                displayName = fullNameProp.GetString();
+            }
+            else if (meta.TryGetProperty("name", out var nameProp))
+            {
+                // Fallback a name
+                displayName = nameProp.GetString();
+            }
+
+            // Obtener imagen
+            if (meta.TryGetProperty("image_url", out var imgProp))
+            {
+                fileName = imgProp.GetString();
+            }
         }
 
-        // 🔥 CONVERTIR filename → URL (UNA SOLA VEZ)
+        // Si no hay display_name, usar el email como fallback
+        if (string.IsNullOrEmpty(displayName))
+        {
+            displayName = email?.Split('@')[0] ?? "Usuario";
+        }
+
+        // CONVERTIR filename → URL
         var imageUrl = BuildPublicUrl(fileName);
 
         return new ProfileResponseDto
         {
             Id = userId,
             Email = email,
+            DisplayName = displayName, // ✅ Añadir display_name
             ImageUrl = imageUrl
         };
     }
@@ -86,13 +113,35 @@ public class ProfileService : IProfileService
             }
         }
 
+        // ✅ Construir user_metadata con display_name e imagen
+        var userMetadata = new Dictionary<string, object>();
+        
+        // Añadir display_name si se proporciona
+        if (!string.IsNullOrEmpty(dto.DisplayName))
+        {
+            userMetadata["display_name"] = dto.DisplayName;
+        }
+        else if (!string.IsNullOrEmpty(dto.FullName))
+        {
+            userMetadata["display_name"] = dto.FullName;
+            userMetadata["full_name"] = dto.FullName;
+        }
+        
+        // Añadir imagen si se proporciona
+        if (!string.IsNullOrEmpty(newFileName))
+        {
+            userMetadata["image_url"] = newFileName;
+        }
+        else if (currentFileName != null)
+        {
+            // Mantener la imagen actual si no se sube una nueva
+            userMetadata["image_url"] = currentFileName;
+        }
+
         var body = new
         {
             email = dto.Email,
-            user_metadata = new
-            {
-                image_url = newFileName // Solo el nombre del archivo
-            }
+            user_metadata = userMetadata
         };
 
         var content = new StringContent(
@@ -109,10 +158,14 @@ public class ProfileService : IProfileService
         if (!response.IsSuccessStatusCode)
             throw new Exception("No se pudo actualizar el usuario");
 
+        // ✅ Obtener el usuario actualizado
+        var updatedUser = await GetProfileAsync(userId);
+
         return new ProfileResponseDto
         {
             Id = userId,
             Email = dto.Email ?? "",
+            DisplayName = updatedUser.DisplayName ?? dto.DisplayName ?? dto.FullName ?? "Usuario",
             ImageUrl = BuildPublicUrl(newFileName)
         };
     }
