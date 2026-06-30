@@ -20,7 +20,8 @@ var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
 
 var supabaseUrl = configuration["Supabase:Url"];
-var supabaseKey = configuration["Supabase:AnonKey"];
+// var supabaseKey = configuration["Supabase:AnonKey"];
+var supabaseKey = configuration["Supabase:ServiceRoleKey"];
 
 
 if (string.IsNullOrEmpty(supabaseUrl))
@@ -58,7 +59,7 @@ builder.Services.AddScoped<ICycleService, CycleService>();
 
 builder.Services.AddScoped<ILogService, LogService>();
 
-builder.Services.AddScoped<IFileStorage, LocalFileStorage>();
+builder.Services.AddScoped<IFileStorage, SupabaseFileStorage>();
 
 builder.Services.AddSingleton<IPredictionEngine, CyclePredictionEngine>();
 
